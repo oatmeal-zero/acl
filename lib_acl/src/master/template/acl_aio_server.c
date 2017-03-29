@@ -157,6 +157,7 @@ static pthread_mutex_t __counter_mutex;
 static ACL_AIO_SERVER_FN __service_main;
 static ACL_AIO_SERVER2_FN __service2_main;
 static ACL_MASTER_SERVER_EXIT_FN __service_onexit;
+static ACL_MASTER_SERVER_LISTEN_FN __service_on_listen;
 static char *__service_name;
 static char **__service_argv;
 static void *__service_ctx;
@@ -172,10 +173,12 @@ static void dispatch_close(ACL_AIO *aio);
 
 static void aio_init(void)
 {
-	acl_assert(pthread_mutex_init(&__closing_time_mutex, NULL) == 0);
-	acl_assert(pthread_mutex_init(&__counter_mutex, NULL) == 0);
-	__last_closing_time = time(NULL);
+	if (pthread_mutex_init(&__closing_time_mutex, NULL) != 0)
+		abort();
+	if (pthread_mutex_init(&__counter_mutex, NULL) != 0)
+		abort();
 
+	__last_closing_time = time(NULL);
 	__use_limit_delay = acl_var_aio_delay_sec > 1 ?
 				acl_var_aio_delay_sec : 1;
 }
@@ -1173,6 +1176,8 @@ static ACL_ASTREAM **create_listener(ACL_AIO *aio, int event_mode acl_unused,
 
 		/* …Ë÷√“Ï≤Ωº‡Ã˝ */
 		acl_aio_listen(as);
+		if (__service_on_listen)
+			__service_on_listen(vs);
 		sstreams[i++] = as;
 
 		if (acl_var_aio_accept_timer <= 0)
@@ -1244,7 +1249,7 @@ static void run_loop(const char *procname)
 	}
 
 	/* not reached here */
-	aio_server_exit();
+	/* aio_server_exit(); */
 }
 
 /* acl_aio_server_main - the real main program */
@@ -1371,6 +1376,10 @@ static void server_main(int argc, char **argv, va_list ap)
 		case ACL_MASTER_SERVER_EXIT:
 			__service_onexit =
 				va_arg(ap, ACL_MASTER_SERVER_EXIT_FN);
+			break;
+		case ACL_MASTER_SERVER_ON_LISTEN:
+			__service_on_listen =
+				va_arg(ap, ACL_MASTER_SERVER_LISTEN_FN);
 			break;
 		default:
 			acl_msg_warn("%s: unknown argument type: %d",

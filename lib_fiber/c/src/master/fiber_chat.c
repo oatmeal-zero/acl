@@ -79,7 +79,7 @@ static unsigned      __nused = 0;
 
 static void server_exit(ACL_FIBER *fiber, int status)
 {
-	acl_msg_info("%s(%d), %s: fiber = %d, service exit now!",
+	acl_msg_info("%s(%d), %s: fiber = %u, service exit now!",
 		__FILE__, __LINE__, __FUNCTION__, acl_fiber_id(fiber));
 	exit(status);
 }
@@ -346,13 +346,14 @@ static void fiber_dispatch(ACL_FIBER *fiber, void *ctx)
 		acl_vstream_close(conn);
 	}
 
-	acl_msg_info("%s(%d), %s: fiber-%d exit now", __FILE__, __LINE__,
+	acl_msg_info("%s(%d), %s: fiber-%u exit now", __FILE__, __LINE__,
 		__FUNCTION__, acl_fiber_id(fiber));
 }
 
 static void listen_callback(int type acl_unused, ACL_EVENT *event,
 	ACL_VSTREAM *sstream, void *ctx acl_unused)
 {
+	static int __max_fd = 0, __last_fd = 0;
 	char ip[64];
 	ACL_VSTREAM *conn = acl_vstream_accept(sstream, ip, sizeof(ip));
 
@@ -365,10 +366,15 @@ static void listen_callback(int type acl_unused, ACL_EVENT *event,
 #endif
 			return;
 
-		acl_msg_error("%s(%d), %s: accept error %s, stoping ...",
-			__FILE__, __LINE__, __FUNCTION__, acl_last_serror());
+		acl_msg_error("%s(%d), %s: accept error %s, maxfd: %d, "
+			"lastfd: %d, stoping ...", __FILE__, __LINE__,
+			__FUNCTION__, acl_last_serror(), __max_fd, __last_fd);
 		return;
 	}
+
+	__last_fd = ACL_VSTREAM_SOCK(conn);
+	if (__last_fd > __max_fd)
+		__max_fd = __last_fd;
 
 	client_wakeup(event, conn);
 }

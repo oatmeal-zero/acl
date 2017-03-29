@@ -2,9 +2,7 @@
 //
 
 #include "stdafx.h"
-#include "acl_cpp/stdlib/string.hpp"
-#include "acl_cpp/stdlib/util.hpp"
-#include "acl_cpp/db/db_sqlite.hpp"
+#include "acl_cpp/lib_acl.hpp"
 
 const char* CREATE_TBL =
 	"create table group_tbl\r\n"
@@ -153,11 +151,116 @@ static bool tbl_delete(acl::db_handle& db, int n)
 	return (true);
 }
 
+class db_thread : public acl::thread
+{
+public:
+	db_thread(acl::db_sqlite& db, acl::locker& lk, int min, int max)
+		: db_(db), lk_(lk), min_(min), max_(max) {}
+	~db_thread(void) {}
+
+protected:
+	// @override
+	void* run(void)
+	{
+		for (int i = min_; i < max_; i++)
+		{
+			lk_.lock();
+			if (tbl_insert(db_, i))
+				printf(">>insert ok: i=%d, affected: %d\r",
+					i, db_.affect_count());
+			else
+			{
+				printf(">>insert error: i = %d\r\n", i);
+				abort();
+			}
+			lk_.unlock();
+		}
+		printf("\r\n");
+		printf(">>insert total affect: %d\n", db_.affect_total_count());
+
+		int  n = 0;
+		for (int i = min_; i < max_; i++)
+		{
+			lk_.lock();
+			int  ret = tbl_select(db_, i);
+			lk_.unlock();
+
+			if (ret >= 0)
+			{
+				n += ret;
+				printf(">>select ok: i=%d, ret=%d\r", i, ret);
+			}
+			else
+			{
+				printf(">>select error: i = %d\r\n", i);
+				abort();
+			}
+		}
+		printf("\r\n");
+		printf(">>select total: %d\r\n", n);
+
+		for (int i = min_; i < max_; i++)
+		{
+			lk_.lock();
+			if (tbl_delete(db_, i))
+				printf(">>delete ok: %d, affected: %d\r",
+					i, (int) db_.affect_count());
+			else
+			{
+				printf(">>delete error: i = %d\r\n", i);
+				abort();
+			}
+			lk_.unlock();
+		}
+		printf("\r\n");
+		printf(">>delete total affected: %d\n", db_.affect_total_count());
+
+		return NULL;
+	}
+
+private:
+	acl::db_sqlite& db_;
+	acl::locker& lk_;
+	int min_;
+	int max_;
+};
+
 int main(void)
 {
-	acl::string dbfile("测试.db");
-	acl::db_sqlite db(dbfile);
-	int   max = 100;
+	acl::acl_cpp_init();
+	acl::log::stdout_open(true);
+
+	acl::stdin_stream in;
+	acl::stdout_stream out;
+	acl::string line;
+
+#if	defined(_WIN32) || defined(_WIN64)
+	const char* libname = "sqlite3.dll";
+#else
+	const char* libname = "libsqlite3.so";
+#endif
+
+	acl::string path;
+	out.format("Enter %s load path: ", libname);
+	if (in.gets(line) && !line.empty())
+#if     defined(_WIN32) || defined(_WIN64)
+		path.format("%s\\%s", line.c_str(), libname);
+#else
+		path.format("%s/%s", line.c_str(), libname);
+#endif
+	else
+		path = libname;
+
+	out.format("%s path: %s\r\n", libname, path.c_str());
+	// 设置动态库加载的全路径
+	acl::db_handle::set_loadpath(path);
+
+	//acl::string dbfile("测试数据库.db");
+	acl::string dbfile("./数据库路径/二级路径/数据库.db");
+
+	// db_sqlite 类对象的声明需在 set_loadpath 之后，因为在 db_sqlite 的
+	// 构造函数中需要运行加载 libsqlite3.so
+	acl::db_sqlite db(dbfile, "gbk");
 
 	if (db.open() == false)
 	{
@@ -183,51 +286,30 @@ int main(void)
 		printf(">>PRAGMA encoding: %s\r\n", buf.c_str());
 	db.show_conf();
 
-	acl::meter_time(__FILE__, __LINE__, "---begin insert---");
-	for (int i = 0; i < max; i++)
-	{
-		bool ret = tbl_insert(db, i);
-		if (ret)
-			printf(">>insert ok: i=%d, affected: %d\r",
-				i, db.affect_count());
-		else
-			printf(">>insert error: i = %d\r\n", i);
-	}
-	printf("\r\n");
-	printf(">>insert total affect: %d\n", db.affect_total_count());
+	int   max = 10000, nstep = 100;
+	std::vector<db_thread*> threads;
 
-	acl::meter_time(__FILE__, __LINE__, "---end insert---");
-	acl::meter_time(__FILE__, __LINE__, "---begin select---");
+	acl::meter_time(__FILE__, __LINE__, "---begin---");
 
-	int  n = 0;
-	for (int i = 0; i < max; i++)
+	acl::locker lk;
+	int j;
+	for (int i = 0; i < max; i = j)
 	{
-		int  ret = tbl_select(db, i);
-		if (ret >= 0)
-		{
-			n += ret;
-			printf(">>select ok: i=%d, ret=%d\r", i, ret);
-		}
-		else
-			printf(">>select error: i = %d\r\n", i);
+		j = i + nstep;
+		db_thread* thread = new db_thread(db, lk, i, j);
+		threads.push_back(thread);
+		thread->set_detachable(false);
+		thread->start();
 	}
-	printf("\r\n");
-	printf(">>select total: %d\r\n", n);
-	acl::meter_time(__FILE__, __LINE__, "---end select---");
 
-	acl::meter_time(__FILE__, __LINE__, "---begin delete---");
-	for (int i = 0; i < max; i++)
+	for (std::vector<db_thread*>::iterator it = threads.begin();
+		it != threads.end(); ++it)
 	{
-		bool ret = tbl_delete(db, i);
-		if (ret)
-			printf(">>delete ok: %d, affected: %d\r",
-				i, (int) db.affect_count());
-		else
-			printf(">>delete error: i = %d\r\n", i);
+		(*it)->wait();
+		delete *it;
 	}
-	printf("\r\n");
-	printf(">>delete total affected: %d\n", db.affect_total_count());
-	acl::meter_time(__FILE__, __LINE__, "---end delete---");
+
+	acl::meter_time(__FILE__, __LINE__, "---end---");
 
 	printf("Enter any key to exit.\r\n");
 	getchar();

@@ -831,7 +831,7 @@ int acl_pthread_tls_del(acl_pthread_key_t key)
 
 void acl_pthread_tls_once_get(acl_pthread_once_t *control_once)
 {
-	memcpy(control_once, &__tls_ctx_control_once,
+	memcpy((void *)control_once, (void *)&__tls_ctx_control_once,
 		sizeof(acl_pthread_once_t));
 }
 

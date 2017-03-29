@@ -189,7 +189,7 @@ int redis_result::argv_to_string(string& buf) const
 	buf.clear();
 
 	if (idx_ == 0)
-		return -1;
+		return 0;
 
 	int length = 0;
 	for (size_t i = 0; i < idx_; i++)
@@ -204,7 +204,7 @@ int redis_result::argv_to_string(string& buf) const
 int redis_result::argv_to_string(char* buf, size_t size) const
 {
 	if (idx_ == 0 || size == 0)
-		return -1;
+		return 0;
 
 	size--;
 	if (size == 0)
@@ -236,7 +236,7 @@ redis_result& redis_result::put(const redis_result* rr, size_t idx)
 	else if (idx == 0)
 		children_idx_ = 0;
 
-	// +1 鏄负浜嗙‘淇濇渶鍚庝竴涓暟缁勫厓绱犲彲浠ヨ璁句负 NULL
+	// +1 是为了确保最后一个数组元素可以被设为 NULL
 	if (children_idx_ + 1 < children_size_)
 	{
 		children_[children_idx_++] = rr;

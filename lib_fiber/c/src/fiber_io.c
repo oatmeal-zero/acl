@@ -5,14 +5,11 @@
 
 typedef struct {
 	EVENT     *event;
-	ACL_FIBER **io_fibers;
 	size_t      io_count;
 	ACL_FIBER  *ev_fiber;
 	ACL_RING    ev_timer;
 	int         nsleeping;
 	int         io_stop;
-	void      (*loop_fn)(void *);
-	void       *loop_ctx;
 } FIBER_TLS;
 
 static FIBER_TLS *__main_fiber = NULL;
@@ -52,8 +49,6 @@ static void thread_free(void *ctx)
 
 	if (tf->event)
 		event_free(tf->event);
-	if (tf->io_fibers)
-		acl_myfree(tf->io_fibers);
 	acl_myfree(tf);
 
 	if (__main_fiber == __thread_fiber)
@@ -73,7 +68,9 @@ static void fiber_io_main_free(void)
 
 static void thread_init(void)
 {
-	acl_assert(acl_pthread_key_create(&__fiber_key, thread_free) == 0);
+	if (acl_pthread_key_create(&__fiber_key, thread_free) != 0)
+		acl_msg_fatal("%s(%d), %s: pthread_key_create error %s",
+			__FILE__, __LINE__, __FUNCTION__, acl_last_serror());
 }
 
 static acl_pthread_once_t __once_control = ACL_PTHREAD_ONCE_INIT;
@@ -83,7 +80,9 @@ void fiber_io_check(void)
 	if (__thread_fiber != NULL)
 		return;
 
-	acl_assert(acl_pthread_once(&__once_control, thread_init) == 0);
+	if (acl_pthread_once(&__once_control, thread_init) != 0)
+		acl_msg_fatal("%s(%d), %s: pthread_once error %s",
+			__FILE__, __LINE__, __FUNCTION__, acl_last_serror());
 
 	__maxfd = acl_open_limit(0);
 	if (__maxfd <= 0)
@@ -91,15 +90,11 @@ void fiber_io_check(void)
 
 	__thread_fiber = (FIBER_TLS *) acl_mymalloc(sizeof(FIBER_TLS));
 	__thread_fiber->event = event_create(__maxfd);
-	__thread_fiber->io_fibers = (ACL_FIBER **)
-		acl_mycalloc(__maxfd, sizeof(ACL_FIBER *));
 	__thread_fiber->ev_fiber = acl_fiber_create(fiber_io_loop,
 			__thread_fiber->event, STACK_SIZE);
 	__thread_fiber->io_count = 0;
 	__thread_fiber->nsleeping = 0;
 	__thread_fiber->io_stop = 0;
-	__thread_fiber->loop_fn = NULL;
-	__thread_fiber->loop_ctx = NULL;
 	acl_ring_init(&__thread_fiber->ev_timer);
 
 	if ((unsigned long) acl_pthread_self() == acl_main_thread_self()) {
@@ -133,13 +128,6 @@ void fiber_io_close(int fd)
 		event_del(__thread_fiber->event, fd, EVENT_ERROR);
 }
 
-void acl_fiber_post_event(void (*loop_fn)(void *), void *ctx)
-{
-	fiber_io_check();
-	__thread_fiber->loop_fn = loop_fn;
-	__thread_fiber->loop_ctx = ctx;
-}
-
 static void fiber_io_loop(ACL_FIBER *self acl_unused, void *ctx)
 {
 	EVENT *ev = (EVENT *) ctx;
@@ -168,12 +156,10 @@ static void fiber_io_loop(ACL_FIBER *self acl_unused, void *ctx)
 		/* add 1 just for the deviation of epoll_wait */
 		event_process(ev, left > 0 ? left + 1 : left);
 
-		if (__thread_fiber->loop_fn != NULL)
-			__thread_fiber->loop_fn(__thread_fiber->loop_ctx);
-
 		if (__thread_fiber->io_stop) {
 			if (__thread_fiber->io_count > 0)
-				acl_msg_info("---------waiting io: %d-----",
+				acl_msg_info("%s(%d), %s: waiting io: %d",
+					__FILE__, __LINE__, __FUNCTION__,
 					(int) __thread_fiber->io_count);
 			break;
 		}
@@ -236,7 +222,7 @@ unsigned int acl_fiber_delay(unsigned int milliseconds)
 
 	ev->timeout = 1;
 
-	fiber = fiber_running();
+	fiber = acl_fiber_running();
 	fiber->when = when;
 	acl_ring_detach(&fiber->me);
 
@@ -246,6 +232,8 @@ unsigned int acl_fiber_delay(unsigned int milliseconds)
 		fiber_count_inc();
 
 	acl_fiber_switch();
+
+	//acl_ring_detach(&fiber->me);
 
 	if (acl_ring_size(&__thread_fiber->ev_timer) == 0)
 		ev->timeout = -1;
@@ -316,53 +304,61 @@ unsigned int acl_fiber_sleep(unsigned int seconds)
 	return acl_fiber_delay(seconds * 1000) / 1000;
 }
 
-static void read_callback(EVENT *ev, int fd, void *ctx acl_unused, int mask)
+static void read_callback(EVENT *ev, int fd, void *ctx, int mask)
 {
+	ACL_FIBER *me = (ACL_FIBER *) ctx;
+
 	event_del(ev, fd, mask);
-	acl_fiber_ready(__thread_fiber->io_fibers[fd]);
+	acl_fiber_ready(me);
 
 	__thread_fiber->io_count--;
-	__thread_fiber->io_fibers[fd] = NULL;
 }
 
 void fiber_wait_read(int fd)
 {
+	ACL_FIBER *me;
+
 	fiber_io_check();
 
+	me = acl_fiber_running();
+
 	if (event_add(__thread_fiber->event,
-		fd, EVENT_READABLE, read_callback, NULL) <= 0)
+		fd, EVENT_READABLE, read_callback, me) <= 0)
 	{
 		//acl_msg_info(">>>%s(%d): fd: %d, not sock<<<",
 		//	__FUNCTION__, __LINE__, fd);
 		return;
 	}
 
-	__thread_fiber->io_fibers[fd] = fiber_running();
 	__thread_fiber->io_count++;
 
 	acl_fiber_switch();
 }
 
-static void write_callback(EVENT *ev, int fd, void *ctx acl_unused, int mask)
+static void write_callback(EVENT *ev, int fd, void *ctx, int mask)
 {
+	ACL_FIBER *me = (ACL_FIBER *) ctx;
+
 	event_del(ev, fd, mask);
-	acl_fiber_ready(__thread_fiber->io_fibers[fd]);
+	acl_fiber_ready(me);
 
 	__thread_fiber->io_count--;
-	__thread_fiber->io_fibers[fd] = NULL;
 }
 
 void fiber_wait_write(int fd)
 {
+	ACL_FIBER *me;
+
 	fiber_io_check();
 
+	me = acl_fiber_running();
+
 	if (event_add(__thread_fiber->event, fd,
-		EVENT_WRITABLE, write_callback, NULL) <= 0)
+		EVENT_WRITABLE, write_callback, me) <= 0)
 	{
 		return;
 	}
 
-	__thread_fiber->io_fibers[fd] = fiber_running();
 	__thread_fiber->io_count++;
 
 	acl_fiber_switch();

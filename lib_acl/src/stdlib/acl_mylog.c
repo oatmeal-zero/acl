@@ -133,7 +133,11 @@ static int open_file_log(const char *filename, const char *logpre)
 #else
 	int   flag = O_RDWR | O_CREAT | O_APPEND;
 #endif
+#ifdef ACL_ANDROID
+	int   mode = 0644;
+#else
 	int   mode = S_IREAD | S_IWRITE;
+#endif
 	ACL_LOG *log;
 	ACL_ITER iter;
 	ACL_VSTREAM *fp;
@@ -285,7 +289,7 @@ static int udp_read(ACL_SOCKET fd, void *buf, size_t size,
 	int timeout acl_unused, ACL_VSTREAM *fp acl_unused, void *arg)
 {
 	ACL_LOG *log = (ACL_LOG*) arg;
-	int   ret;
+	ssize_t  ret;
 
 #ifdef ACL_UNIX
 	ret = recvfrom(fd, buf, size, 0, (struct sockaddr*) &log->from,
@@ -296,14 +300,14 @@ static int udp_read(ACL_SOCKET fd, void *buf, size_t size,
 #else
 #error "unknown OS"
 #endif
-	return (ret);
+	return (int) ret;
 }
 
 static int udp_write(ACL_SOCKET fd, const void *buf, size_t size,
 	int timeout acl_unused, ACL_VSTREAM *fp acl_unused, void *arg)
 {
 	ACL_LOG *log = (ACL_LOG*) arg;
-	int   ret;
+	ssize_t  ret;
 
 #ifdef ACL_UNIX
 	ret = sendto(fd, buf, size, 0, (struct sockaddr*) &log->dest,
@@ -314,7 +318,7 @@ static int udp_write(ACL_SOCKET fd, const void *buf, size_t size,
 #else
 #error	"unknown OS"
 #endif
-	return (ret);
+	return (int) ret;
 }
 
 static int open_udp_log(const char *addr, const char *logpre)
@@ -576,7 +580,7 @@ static void file_vsyslog(ACL_LOG *log, const char *info, const char *fmt, va_lis
 		snprintf(tbuf, sizeof(tbuf), "%s %s (pid=%d, tid=%u)(%s): ",
 			fmtstr, log->logpre, (int) getpid(),
 			(unsigned int) acl_pthread_self(), info);
-#elif defined(LINUX2)
+#elif defined(ACL_LINUX)
 		snprintf(tbuf, sizeof(tbuf), "%s %s (pid=%d, tid=%llu)(%s): ",
 			fmtstr, log->logpre, (int) getpid(),
 			(unsigned long long int) acl_pthread_self(), info);
@@ -633,7 +637,7 @@ static void net_vsyslog(ACL_LOG *log, const char *info, const char *fmt, va_list
 		snprintf(tbuf, sizeof(tbuf), " %s (pid=%d, tid=%u)(%s): ",
 			log->logpre, (int) getpid(),
 			(unsigned int) acl_pthread_self(), info);
-#elif defined(LINUX2)
+#elif defined(ACL_LINUX)
 		snprintf(tbuf, sizeof(tbuf), " %s (pid=%d, tid=%llu)(%s): ",
 			log->logpre, (int) getpid(),
 			(unsigned long long int) acl_pthread_self(), info);

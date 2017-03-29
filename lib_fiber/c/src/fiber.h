@@ -5,6 +5,13 @@
 #include <setjmp.h>
 #include "event.h"
 
+#ifdef ACL_ARM_LINUX
+extern int getcontext(ucontext_t *ucp);
+extern int setcontext(const ucontext_t *ucp);
+extern int swapcontext(struct ucontext *old_ctx, struct ucontext *new_ctx);
+extern void makecontext(ucontext_t *ucp, void (*func)(), int argc, ...);
+#endif
+
 typedef enum {
 	FIBER_STATUS_READY,
 	FIBER_STATUS_RUNNING,
@@ -22,13 +29,15 @@ struct ACL_FIBER {
 #endif
 	fiber_status_t status;
 	ACL_RING       me;
-	size_t         id;
-	size_t         slot;
+	unsigned       id;
+	unsigned       slot;
 	acl_int64      when;
 	int            errnum;
 	int            sys;
+	int            signum;
 	unsigned int   flag;
 #define FIBER_F_SAVE_ERRNO	(unsigned) 1 << 0
+#define	FIBER_F_KILLED		(unsigned) 1 << 1
 
 	FIBER_LOCAL  **locals;
 	int            nlocal;
@@ -107,9 +116,9 @@ struct ACL_FIBER_SEM {
 
 /* in fiber.c */
 extern __thread int acl_var_hook_sys_api;
+void fiber_free(ACL_FIBER *fiber);
 
 /* in fiber_schedule.c */
-ACL_FIBER *fiber_running(void);
 void fiber_save_errno(void);
 void fiber_exit(int exit_code);
 void fiber_system(void);
